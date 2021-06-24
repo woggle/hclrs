@@ -1,4 +1,5 @@
 use ast::{Statement, WireDecl, WireWidth, WireValue, WireValues, SpannedExpr};
+use ast::{Statement, WireDecl, WireWidth, WireValue, WireValues, SpannedExpr,Expr,BinOpCode, UnOpCode};
 use errors::{find_close_names_in, Error};
 use lexer::Span;
 use y86_disasm::{disassemble_to_string, name_register};
@@ -275,6 +276,15 @@ pub struct RegisterBank {
     defaults: WireValues, // mapped to out names
     stall_signal: String,
     bubble_signal: String,
+}
+impl RegisterBank {
+    pub fn get_signal(&self) -> Vec<(String, String, WireWidth)> {
+        return self.signals.clone()
+    }
+    pub fn get_label(&self) -> String {
+            return self.label.clone()
+        }
+
 }
 
 // interpreter representation of a program
@@ -571,7 +581,403 @@ fn check_double_declare<'a, 'b>(errors: &'b mut Vec<Error>, name: &'a str, span:
     wire_decl_spans.insert(name, span);
 }
 
+#[derive(Debug,Clone)]
+pub struct LabelHolder {
+    labels: Vec<WiretagMarker>  
+
+}
+#[derive(Debug,Clone)]
+pub struct WiretagMarker {
+    low: u8,
+    high: u8,
+    from: String, 
+    to: String,  
+
+}
+
+impl WiretagMarker {
+    pub fn new(l: u8,h: u8,f: String, t:String) -> WiretagMarker{
+        WiretagMarker{low:l,high:h,from:f, to:t}
+    }
+
+    pub fn get_from(&self) -> String {
+        return self.from.clone()
+    }
+    pub fn get_to(&self) -> String {
+        return self.to.clone()
+    }
+    pub fn get_low(&self) -> u8 {
+        return self.low.clone()
+    }
+    pub fn get_high(&self) -> u8 {
+        return self.high.clone()
+    }
+}
+#[derive(Debug,Clone)]
+pub struct FakeMux {
+    pub out: String,
+    pub values: Vec<String>,
+}
+impl FakeMux {
+    pub fn new(s: String) -> FakeMux{
+       FakeMux{out:s,values:Vec::new()}
+        
+    }
+    pub fn add_value(&mut self,ex: String)
+    {
+        self.values.push(ex.clone());
+    }
+}
+#[derive(Debug,Clone)]
+pub struct Wireassign {
+    pub left: String,
+    pub right: Vec<String>,
+}
+impl Wireassign {
+    pub fn new(s: String) -> Wireassign{
+       Wireassign{left:s,right:Vec::new()}
+        
+    }
+    pub fn add_string(&mut self,ex: String)
+    {
+        self.right.push(ex.clone());
+    }
+}
 impl Program {
+pub fn bin_op_to_string(&self,boc:BinOpCode) -> String
+{
+    match boc {
+                                        
+        BinOpCode::Add => return String::from("+"),
+        BinOpCode::Sub => return String::from("-"),
+        BinOpCode::Mul => return String::from("*"),
+        BinOpCode::Div => return String::from("/"),  
+        BinOpCode::Or =>  return String::from("|"),
+        BinOpCode::Xor => return String::from("^"),
+        BinOpCode::And => return String::from("&"),
+        BinOpCode::Equal => return String::from("="),
+        BinOpCode::NotEqual => return String::from("!="),
+        BinOpCode::LessEqual => return String::from("<="),
+        BinOpCode::GreaterEqual => return String::from(">="),
+        BinOpCode::Less => return String::from("<"),
+        BinOpCode::Greater => return String::from(">"),
+        BinOpCode::LogicalAnd => return String::from("&&"),  
+        BinOpCode::LogicalOr =>  return String::from("||"),
+        BinOpCode::LeftShift =>  return String::from(">>"),
+        BinOpCode::RightShift => return String::from("<<"),
+        BinOpCode::Error => panic!("unreported parse error"),
+
+    }                                
+
+}
+pub fn un_op_to_string(&self,uoc:UnOpCode) -> String
+{
+    match uoc {
+                                        
+        UnOpCode::Plus => return String::from("+"),
+        UnOpCode::Negate => return String::from("-"),
+        UnOpCode::Complement => return String::from("~"),
+        UnOpCode::Not => return String::from("!"),
+
+    }                                
+
+}
+
+pub fn get_all_mux(&self)-> Vec<FakeMux>
+{
+
+    let mut vfm=Vec::new();
+    for action in &self.actions
+    {
+
+         match action{
+            Action::Assign(ref name, ref se, _) =>{
+                
+                
+                match se.to_expr() {
+                    Expr::Mux(ref v)=>{
+                        let mut fm = FakeMux::new(name.to_string());
+                        for opt in v{
+                            match opt.value.to_expr() {
+                                Expr::BinOp(ref boc, ref left, ref right)=>{
+                                    let mut boc_string= self.bin_op_to_string(*boc);
+                                    let mut lft:String=String::new();
+                                    let mut rgt:String= String::new();
+                                    match left.to_expr()
+                                    {
+                                        Expr::Constant(ref wv)=>{lft=format!("{}", wv.bits);},
+                                        Expr::NamedWire(ref name)=>{lft=format!("{}", *name);},
+                                        Expr::UnOp(ref uoc, ref covered) =>{
+                                            let mut uoc_string= self.un_op_to_string(*uoc);
+                                            let mut uoc_exp:String= String::new();
+                                            match covered.to_expr() {
+                                                Expr::Constant(ref wv)=>{uoc_exp=format!("{}", wv.bits);},
+                                                Expr::NamedWire(ref name)=>{uoc_exp=format!("{}", *name);},
+
+                                                _=>{}
+                                            }
+                                            lft.push_str(&uoc_string);
+                                            lft.push_str(uoc_exp.as_str());
+                                           
+                                        }
+                                        _=>{}
+                                    }
+                                    match right.to_expr() {
+                                        Expr::Constant(ref wv)=>{rgt=format!("{}", wv.bits);},
+                                        Expr::NamedWire(ref name)=>{rgt=format!("{}", *name);},
+                                        Expr::UnOp(ref uoc, ref covered) =>{
+                                            let mut uoc_string= self.un_op_to_string(*uoc);
+                                            let mut uoc_exp:String= String::new();
+                                            match covered.to_expr() {
+                                                Expr::Constant(ref wv)=>{uoc_exp=format!("{}", wv.bits);},
+                                                Expr::NamedWire(ref name)=>{uoc_exp=format!("{}", *name);},
+
+                                                _=>{}
+                                            }
+                                            rgt.push_str(&uoc_string);
+                                            rgt.push_str(uoc_exp.as_str());
+                                            
+                                        }
+                                        _=>{}
+                                    }
+                                    let mut temp_str=String::from(lft);
+                                    temp_str.push_str(&boc_string);
+                                    temp_str.push_str(&rgt);
+                                    fm.add_value(temp_str.clone());
+                            },
+                                Expr::Constant(ref wv)=>{fm.add_value(format!("{}", wv.bits));},
+                                Expr::NamedWire(ref name)=>{fm.add_value(format!("{}", *name));},
+                                Expr::UnOp(ref uoc, ref covered) =>{
+                                    let mut uoc_string= self.un_op_to_string(*uoc);
+                                    let mut uoc_exp=String::new();
+
+                                    match covered.to_expr() {
+                                        Expr::Constant(ref wv)=>{uoc_exp=format!("{}", wv.bits);},
+                                        Expr::NamedWire(ref name)=>{uoc_exp=format!("{}", *name);},
+
+                                        _=>{}
+                                    }
+                                    let mut temp_str=String::new();
+                                    temp_str.push_str(uoc_string.as_str());
+                                    temp_str.push_str(uoc_exp.as_str());
+                                    fm.add_value(temp_str)
+
+
+                                }
+                                _=>{}
+
+                            }
+
+
+                        }
+                        vfm.push(fm);
+                    },
+                    _=>{}
+                }
+                 
+            },
+            _=>{}
+        }
+
+       
+    }
+    vfm
+
+}
+
+
+pub fn get_all_wire_assignments(&self)->Vec<Wireassign>
+{
+    let mut vwa:Vec<Wireassign>=Vec::new();
+    for action in &self.actions
+    {
+        match action{
+            Action::Assign(ref name, ref se, _) =>{
+                let mut w_a:Wireassign = Wireassign::new(name.to_string());
+                match se.to_expr() {
+                    Expr::BinOp(ref boc, ref left, ref right)=>{
+                        let mut middle= self.bin_op_to_string(*boc);
+                        let mut lft:String=String::new();
+                        let mut rgt:String= String::new();
+                        match left.to_expr() {
+                            Expr::Constant(ref wv)=>{lft=format!("{}", wv.bits);},
+                            Expr::NamedWire(ref name)=>{lft=format!("{}", *name);},
+                            _=>{}
+                        }
+                        match right.to_expr() {
+                            Expr::Constant(ref wv)=>{rgt=format!("{}", wv.bits);},
+                            Expr::NamedWire(ref name)=>{rgt=format!("{}", *name);},
+                            _=>{}
+                        }
+                        w_a.add_string(lft);
+                        w_a.add_string(middle);
+                        w_a.add_string(rgt);
+                        vwa.push(w_a);
+                    },
+                    Expr::Constant(ref wv)=>{
+
+                        w_a.add_string(format!("{}", wv.bits));
+                        vwa.push(w_a);
+                    },
+                    Expr::NamedWire(ref name)=>{
+                        w_a.add_string(format!("{}", *name));
+                        vwa.push(w_a);
+                    },
+                    Expr::UnOp(ref code , ref se) =>{
+                        w_a.add_string(format!("{}", self.un_op_to_string(*code)));
+                        let mut lft:String=String::new();
+                        match se.to_expr() {
+
+
+                            Expr::Constant(ref wv)=>{lft=format!("{}", wv.bits);},
+                            Expr::NamedWire(ref name)=>{lft=format!("{}", *name);},
+                            _=>{}
+                        }
+                        w_a.add_string(lft);
+                        vwa.push(w_a);
+
+
+                    },
+                    _=>{}
+                }
+            },
+            _=>{}
+        }
+    }
+    vwa
+}
+pub fn get_all_reg(&self)-> Vec<RegisterBank>{
+
+    return self.register_banks.clone();
+}
+pub fn print_all_registers(&self){
+    for register in self.register_banks.clone(){
+        self.print_register(register);
+    }
+fn print_register(&self,reg: RegisterBank)
+{
+
+    println!("{}",reg.label );
+    for sig in reg.signals
+    {
+
+        println!(" the in signal is {} and the out signal is {}",sig.0,sig.1 );
+
+    }
+
+}
+pub fn label_wires(&self) -> Vec<WiretagMarker>
+     {
+        let mut hm= HashMap::new();
+        let mut es:Vec<WiretagMarker> = Vec::new();
+        let mut change=true;
+        let mut count: u32;
+        let mut done:bool;
+       
+        while change 
+        {
+           change=false;
+           count=0;   
+            'action_loop :for action in &self.actions
+            {
+                match hm.get(&count) {
+               Some(&_int) => {
+                done=true;
+            },
+               _ => {
+                done=false;
+            }
+           }
+                if !done {
+                let mut temp_vec=es.clone();
+                match action{
+                    Action::Assign(ref name, ref se, _) =>{
+                        match se.to_expr() {
+                            Expr::BitSelect{ref from, low, high} =>{
+                                match from.to_expr() {
+                                    Expr::NamedWire (ref str_name) => {
+                                        if str_name=="i10bytes" {
+                                           es.push(WiretagMarker::new(*low,*high,str_name.to_string(),name.to_string()));
+                                            change=true;
+                                            hm.insert(count,"valid");
+                                        }
+                                        else {
+                                            'temp_vec_loop :for wiretag_marker in temp_vec{
+                                                if wiretag_marker.to== str_name.to_string(){
+                                                    es.push(WiretagMarker::new(*low,*high, wiretag_marker.from, name.to_string()));
+                                                    change=true;
+                                                    hm.insert(count,"valid");
+                                                    //break 'temp_vec_loop;
+                                                }
+                                            }
+
+                                        }
+                                    },
+                                    _=>{}
+                                }
+                            },
+                            _=>{}  
+                        }
+                    },
+                    _=>{}
+
+                 }
+                 count=count+1;
+             }
+            }
+        }
+        es
+}
+
+
+pub fn get_pc(&self) -> String {
+    let mut s = String::new();
+    for action in &self.actions{
+        match action{
+            Action::Assign(ref name, ref se, _) =>{
+                if name=="pc"{
+                   match se.to_expr(){
+                        Expr::NamedWire(ref wire) =>{
+                            s.push_str(wire)
+                        },
+                        _ =>{   
+                        }
+                   }
+                }
+            },
+            _ =>{
+                
+            },
+        }
+    }
+    s
+}
+
+fn find_reg(&self, name:String)-> String{
+
+    let mut flag:bool = false;
+    let mut s:String= String::new();
+    for bank in &self.register_banks{
+        if flag==false{
+        for sig in &bank.signals{
+            if sig.0==name&& flag==false{
+                s.push_str(&bank.label);
+                flag=true;
+            }
+            if sig.1==name && flag==false{
+               s.push_str(&bank.label);
+                flag=true;
+            }
+
+        }
+    }
+    }
+    s
+}
+pub fn get_pc_reg(&self)-> String{
+return self.find_reg(self.get_pc());
+
+}
     pub fn new_y86(statements: Vec<Statement>) -> Result<Program, Error> {
         Program::new(statements, y86_fixed_functions())
     }
@@ -1158,7 +1564,78 @@ impl RunningProgram {
             options: RunOptions::default(),
         }
     }
+    pub fn get_all_muxes(&self)->Vec<FakeMux>{
 
+        return self.program.get_all_mux();
+    }
+    pub fn print_all_muxes(&self){
+        let temp=self.get_all_muxes();
+        for fm in temp{
+            println!("output of the mux goes to {}", fm.out);
+            println!("the possible values are");
+            for val in fm.values{
+                print!(" {} ", val );
+            }
+            println!("");
+
+        }
+
+    }
+    fn get_all_wire_assignments(&self)->Vec<Wireassign>{
+
+        return self.program.get_all_wire_assignments();
+    }
+    pub fn print_all_wire_assignments(&self)
+    {
+        let temp=self.get_all_wire_assignments();
+        for w_a in temp{
+            let mut temp_str= String::new();
+            if w_a.right.len()==1 {
+                temp_str.push_str(w_a.left.as_str());
+                temp_str.push_str("=");
+                temp_str.push_str(w_a.right[0].as_str());
+            }
+            if w_a.right.len()==2 {
+                temp_str.push_str(w_a.left.as_str());
+                temp_str.push_str("=");
+                temp_str.push_str(w_a.right[0].as_str());
+                temp_str.push_str(w_a.right[1].as_str());
+
+                
+            }
+            if w_a.right.len()==3 {
+                temp_str.push_str(w_a.left.as_str());
+                temp_str.push_str("=");
+                temp_str.push_str(w_a.right[0].as_str());
+                temp_str.push_str(w_a.right[1].as_str());
+                temp_str.push_str(w_a.right[2].as_str());
+                
+            }
+
+            println!("{}",temp_str );
+        }
+
+    fn get_full_pc(&self)-> (String,String){
+        let pc = self.program.get_pc();
+        let pc_reg=self.program.get_pc_reg();
+        return (pc,pc_reg)
+    }
+    fn get_all_reg(&self)->Vec<RegisterBank>{
+        return self.program.get_all_reg()
+    }
+    pub fn print_all_registers(&self)
+    {
+
+        self.program.print_all_registers();
+    }
+    pub fn parse_file_non_pipeline(&self) -> (String,String,Vec<WiretagMarker>, Vec<Wireassign>,Vec<FakeMux>, Vec<RegisterBank>) {
+        let full_pc:(String,String)=self.get_full_pc();
+        let parse_i10:Vec<WiretagMarker>=self.program.label_wires();
+        let wire_assignments: Vec<Wireassign>=self.get_all_wire_assignments();
+        let muxes:Vec<FakeMux>=self.get_all_muxes();
+        let registers:Vec<RegisterBank>=self.get_all_reg();
+        return(full_pc.0,full_pc.1,parse_i10, wire_assignments, muxes,registers)
+    }
     pub fn set_options(&mut self, options: RunOptions) {
         self.options = options;
     }

@@ -65,6 +65,7 @@ fn main_real() -> Result<bool, Error> {
     opts.optflag("h", "help", "print this help menu");
     opts.optflag("i", "interactive", "prompt after each cycle");
     opts.optflag("", "trace-assignments", "show assignments in the order they are simulated");
+    opts.optflag("", "parse-file", "parse hcl file ");
     opts.optflag("", "version", "print version number");
     let parsed_opts = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -94,6 +95,7 @@ fn main_real() -> Result<bool, Error> {
         run_options.set_prompt(Box::new(press_enter));
     }
     let check_only = parsed_opts.opt_present("c");
+    let parse_file = parsed_opts.opt_present("parse-file");
     let free_args = parsed_opts.free;
     if free_args.len() < 1 {
         print_usage(&program_name, opts);
@@ -122,6 +124,18 @@ fn main_real() -> Result<bool, Error> {
         };
     if check_only {
         println!("syntax OK");
+        return Ok(true);
+    }
+    if parse_file  {
+        
+        let t = running_program.parse_file_non_pipeline();
+        println!("output assigned to pc is {} and the register with this wire is {}",t.0,t.1 );
+        for wiretag_mark in t.2{
+           println!("the wire {} is gotten from wire  {} and bytes {} to {}", wiretag_mark.get_to(),wiretag_mark.get_from(),wiretag_mark.get_low(),wiretag_mark.get_high()); 
+        }
+        running_program.print_all_registers();
+        running_program.print_all_muxes();
+        running_program.print_all_wire_assignments();
         return Ok(true);
     }
     if free_args.len() < 2 || free_args.len() > 3 {
